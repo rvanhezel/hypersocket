@@ -11,7 +11,7 @@ from math import floor, log10
 NAME = "BTC"
 QUOTE_SIZE = 0.1
 MAX_POSITION_SIZE = 0.5
-SPREAD = 0.0001
+SPREAD = 0.0002
 TIF = "Alo"
 PREVIOUS_MID = None
 DEVIATION_THRESHOLD = 0.0001
@@ -23,17 +23,17 @@ order_state: dict[Side, dict[int, str] | None ] = { Side.Bid: None, Side.Ask: No
 async def trading_loop(queue: asyncio.Queue, ws: Hypersocket):
     logging.info("Starting trading loop...")
     counter = 0
-    while True and counter < 5:
+    while True and counter < 10:
 
         if positions is None:
+            await asyncio.sleep(0.1)
             continue
 
         latest_quote = await queue.get()
-        logging.info(f"Current bbo for {NAME}: {latest_quote}")
-        # await manage_order(latest_quote, ws)
+        await manage_order(latest_quote, ws)
 
         counter += 1
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
 
     logging.info("Ending trading loop")
     raise Exception("Trading loop ended after 5 iterations")
@@ -43,8 +43,8 @@ async def manage_order(quote: TOB, ws: Hypersocket):
 
     logging.info(f"Managing orders based on quote: {quote}")
     mid = (quote.bid.px + quote.ask.px) / 2
-    bid = mid * (1 - SPREAD)
-    ask = mid * (1 + SPREAD)
+    bid = (mid * (1 - SPREAD))
+    ask = (mid * (1 + SPREAD))
 
     if PREVIOUS_MID:
         if abs(mid - PREVIOUS_MID) / PREVIOUS_MID > DEVIATION_THRESHOLD:
@@ -74,6 +74,7 @@ async def cancel_order(ws: Hypersocket, oid: str):
 
 async def update_existing_orders(ws: Hypersocket, bid: float, ask: float):
     logging.info("Updating existing orders due to mid price deviation")
+
     for side, orders in order_state.items():
         for oid, details in orders.items():
             if details["status"] == "resting":
@@ -93,7 +94,6 @@ async def update_existing_orders(ws: Hypersocket, bid: float, ask: float):
     
 
 def round_price(price: float, sig_figs: int = 5) -> float:
-    """Round price to N significant figures (Hyperliquid requires <= 5)."""
     if price == 0:
         return 0
     decimals = sig_figs - 1 - floor(log10(abs(price)))
@@ -104,14 +104,15 @@ async def place_new_order(ws: Hypersocket, side: Side, coin: str, price: float):
     price = round_price(price)
     logging.info(f"Placing new {side} order for {coin}@{price}, qty {QUOTE_SIZE}")
 
-    response = await ws.order(coin, side == "B", QUOTE_SIZE, price, {"limit": {"tif": TIF}})
+    response = await ws.order(coin, side == "B", price, QUOTE_SIZE, {"limit": {"tif": TIF}})
     logging.info(f"Order response: {response}")
+    payload = response["response"]["payload"]
 
-    if response["status"] == "ok":
-        order_details = response["response"]["data"]["statuses"][0]
+    if payload["status"] == "ok":
+        order_details = payload["response"]["data"]["statuses"][0]
         logging.info(f"Order details: {order_details}")
         if "error" in order_details:
-            logging.error(f"Error placing order: {order_details['error']}")
+            logging.error(f"Order placed with error: {order_details['error']}")
             return
         state = next(iter(order_details))
         details = order_details[state]
@@ -129,25 +130,33 @@ async def update_orders(queue: asyncio.Queue):
         o = await queue.get()
         logging.info(f"updating orders: {o}")
         match o.status:
-            case "resting":
+            case "resting" | "open":
                 order_state[o.side][o.oid]["status"] = o.status
             case _:
-                logging(f"order update for {o.oid=}, {o.status=}. Nothing done")
+                logging.info(f"order update for {o.oid=}, {o.status=}. Nothing done")
         logging.info(f"Updated order state: {order_state}")
 
 
 async def update_positions(queue: asyncio.Queue):
+    global positions
     while True:
         p = await queue.get()
         logging.info(f"updating positions: {p}")
         if p:
-            if p.coin == NAME:
-                positions[p.coin] = p.szi
-            else:
-                logging.warning(f"Received position for coin != {NAME}, ignoring...")
+            for pos in p:
+                if pos.coin == NAME:
+                    positions[pos.coin] = pos.szi
+                else:
+                    logging.warning(f"Received position for coin != {NAME}, ignoring...")
         else:
-            positions[NAME] = 0.0
+            positions = {NAME: 0.0}
         logging.info(f"Updated positions: {positions}")
+
+
+async def update_user_events(queue: asyncio.Queue):
+    while True:
+        ue = await queue.get()
+        logging.info(f"updating user events: {ue}")
 
 
 async def main():
@@ -161,31 +170,34 @@ async def main():
         ],
     )
     logging.info("Launching main...")
-    account = eth_account.Account.from_key(os.getenv("HL_API_SECRET")) # -> for signing messages, not needed for subscribing to channels
+    account = eth_account.Account.from_key(os.getenv("HL_API_SECRET"))
     address = os.getenv("HL_ACCOUNT_ADDRESS")
  
     ws = Hypersocket(os.getenv("HL_API_SECRET"))
     await ws.connect()
 
-    # bbo_queue = await ws.subscribe({"type": "bbo", "coin": NAME})
-    # user_events_queue = await ws.subscribe({"type": "userEvents", "user": address})
-    # order_updates_queue = await ws.subscribe({"type": "orderUpdates", "user": address})
-    # ch_queue = await ws.subscribe({"type": "clearinghouseState", "user": address})
+    bbo_queue = await ws.subscribe({"type": "bbo", "coin": NAME})
+    user_events_queue = await ws.subscribe({"type": "userEvents", "user": address})
+    order_updates_queue = await ws.subscribe({"type": "orderUpdates", "user": address})
+    ch_queue = await ws.subscribe({"type": "clearinghouseState", "user": address})
 
-    # async with asyncio.TaskGroup() as tg:
-    #     tg.create_task(trading_loop(bbo_queue, ws))
-    #     tg.create_task(update_orders(order_updates_queue))
-    #     tg.create_task(update_positions(ch_queue))
+    try: 
 
-    response = await ws.order(NAME, True, 72000.5, QUOTE_SIZE, {"limit": {"tif": TIF}})
-    logging.info(f"Order response: {response}")
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(trading_loop(bbo_queue, ws))
+            tg.create_task(update_orders(order_updates_queue))
+            tg.create_task(update_positions(ch_queue))
+            tg.create_task(update_user_events(user_events_queue))
 
- 
+    except KeyboardInterrupt:
+        logging.info("Nooo")
+        raise Exception("KeyboardInterrupt received, shutting down...")
+    finally:
+        await ws.close()
+        logging.info("Websocket connection closed. Exiting main.")
+
 
 if __name__ == "__main__":
     load_dotenv()
+    asyncio.run(main())
 
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logging.info("Nooo")

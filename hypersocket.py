@@ -5,11 +5,11 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 import time
-from hyperliquid.utils.signing import sign_l1_action, get_timestamp_ms
+from hyperliquid.utils.signing import sign_l1_action, get_timestamp_ms, float_to_wire
 from eth_account import Account
 
 
-MAINNET = "wss://api.hyperliquid.xyz/ws"
+# MAINNET = "wss://api.hyperliquid.xyz/ws"
 TESTNET = "wss://api.hyperliquid-testnet.xyz/ws"
 URL = TESTNET
 
@@ -101,6 +101,9 @@ class Hypersocket:
         self._req_id = 0
         self.wallet = Account.from_key(pkey) if pkey else None
 
+        if self.wallet:
+            logging.info(f"Initialized Hypersocket with wallet address: {self.wallet.address}")
+
     def _prepare_future(self, key: str):
         future = asyncio.Future()
         self._request_futures[key] = future
@@ -113,7 +116,7 @@ class Hypersocket:
     
     async def _response_handler(self):
         async for message in self._ws:
-            logging.info(f"<-{message=}")
+            # logging.info(f"<- {message=}")
             msg = json.loads(message)
             if channel := msg.get("channel"):
                 match channel:
@@ -169,11 +172,11 @@ class Hypersocket:
                 status=item["status"],
                 status_timestamp=int(item["statusTimestamp"]),
             ))
-        key = self._key("orderUpdates", data["user"])
-        if queue := self._request_queues.get(key):
+        queue = next((q for k, q in self._request_queues.items() if k.startswith("ORDERUPDATES:")), None)
+        if queue:
             queue.put_nowait(updates)
         else:
-            logging.error(f"uninitialized orderUpdates queue for {key=}")
+            logging.error("uninitialized orderUpdates queue")
 
     def _dispatch_user_events(self, data: dict):
         logging.info(f"Dispatching user event: data received: {data}")
@@ -209,6 +212,7 @@ class Hypersocket:
 
     def _dispatch_clearinghouse_state(self, data: dict):
         logging.info(f"Dispatching clearinghouse state: data received: {data}")
+
         chs = data["clearinghouseState"]
         key = self._key("clearinghouseState", data["user"])
         if queue := self._request_queues.get(key):
@@ -270,6 +274,11 @@ class Hypersocket:
         self._ws = await websockets.connect(URL)
         self.response_task = asyncio.create_task(self._response_handler())
 
+    async def close(self):
+        self.response_task.cancel()
+        if self._ws:
+            await self._ws.close()
+
     def _key(self, prefix: str, suffix: str):
         return f"{prefix}:{suffix}".upper()
 
@@ -279,13 +288,13 @@ class Hypersocket:
 
         key = self._key(feed["type"], feed.get("coin") or feed.get("user"))
         future = self._prepare_future(key)
+        queue = self._prepare_queue(key)
         body = {
             "method": "subscribe",
             "subscription": feed
         }
         await self._send(body)
         await future
-        queue = self._prepare_queue(key)
         return queue
 
     async def _send(self, msg: dict):
@@ -330,10 +339,10 @@ class Hypersocket:
                     reduce_only: bool = False, 
                     cloid: str = None):
         order = {
-            "a": 0,
+            "a": 3,
             "b": is_buy,
-            "p": str(price),
-            "s": str(size),
+            "p": float_to_wire(price),
+            "s": float_to_wire(size),
             "r": reduce_only,
             "t": order_type
         }
