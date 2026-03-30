@@ -7,7 +7,7 @@ from enum import StrEnum
 import time
 from hyperliquid.utils.signing import sign_l1_action, get_timestamp_ms, float_to_wire
 from eth_account import Account
-
+from utils import spawn_with_exception
 
 # MAINNET = "wss://api.hyperliquid.xyz/ws"
 TESTNET = "wss://api.hyperliquid-testnet.xyz/ws"
@@ -75,7 +75,6 @@ class CumFunding:
 class Leverage:
     type: str
     value: int
-    raw_usd: float
 
 @dataclass
 class Position:
@@ -130,7 +129,7 @@ class Hypersocket:
                     case "orderUpdates":
                         logging.info("Response handler: received orderUpdate")
                         self._dispatch_order_updates(msg["data"])
-                    case "userEvents":
+                    case "user":
                         logging.info("Response handler: received userEvent")
                         self._dispatch_user_events(msg["data"])
                     case "bbo":
@@ -172,7 +171,7 @@ class Hypersocket:
                 status=item["status"],
                 status_timestamp=int(item["statusTimestamp"]),
             ))
-        queue = next((q for k, q in self._request_queues.items() if k.startswith("ORDERUPDATES:")), None)
+        queue = next((q for k, q in self._request_queues.items() if k.startswith("ORDERUPDATES:")), None) 
         if queue:
             queue.put_nowait(updates)
         else:
@@ -239,8 +238,7 @@ class Hypersocket:
                     ),
                     leverage=Leverage(
                         type=lev["type"],
-                        value=int(lev["value"]),
-                        raw_usd=float(lev["rawUsd"]),
+                        value=int(lev["value"])
                     ),
                 ))
             queue.put_nowait(positions)
@@ -272,7 +270,10 @@ class Hypersocket:
 
     async def connect(self):
         self._ws = await websockets.connect(URL)
-        self.response_task = asyncio.create_task(self._response_handler())
+        self.response_task = spawn_with_exception(self._response_handler())
+
+    async def wait_for_response_handler(self):
+        await self.response_task
 
     async def close(self):
         self.response_task.cancel()
@@ -363,4 +364,64 @@ class Hypersocket:
             )
         }
         return await self._request(payload)
+
+    async def modify_order(self,
+                           oid: int,
+                           coin: str,
+                           is_buy: bool,
+                           price: float,
+                           size: float,
+                           order_type: dict,
+                           reduce_only: bool = False,
+                           cloid: str = None):
+        order = {
+            "a": 3,
+            "b": is_buy,
+            "p": float_to_wire(price),
+            "s": float_to_wire(size),
+            "r": reduce_only,
+            "t": order_type
+        }
+        if cloid:
+            order["c"] = cloid
+
+        action = {
+            "type": "batchModify",
+            "modifies": [{"oid": oid, "order": order}]
+        }
+        nonce = get_timestamp_ms()
+        payload = {
+            "action": action,
+            "nonce": nonce,
+            "signature": sign_l1_action(
+                self.wallet, action, None, nonce, None, False
+            )
+        }
+        return await self._request(payload)
+
+    async def cancel_orders(self, oids: list[int]):
+        action = {
+            "type": "cancel",
+            "cancels": [{"a": 3, "o": oid} for oid in oids]
+        }
+        nonce = get_timestamp_ms()
+        payload = {
+            "action": action,
+            "nonce": nonce,
+            "signature": sign_l1_action(
+                self.wallet, action, None, nonce, None, False
+            )
+        }
+        return await self._request(payload)
+
+    async def close_position(self, coin: str, size: float, is_buy: bool, price: float, slippage: float = 0.05):
+        aggressive_price = price * (1 + slippage) if is_buy else price * (1 - slippage)
+        return await self.order(
+            coin=coin,
+            is_buy=is_buy,
+            price=aggressive_price,
+            size=size,
+            order_type={"limit": {"tif": "Ioc"}},
+            reduce_only=True,
+        )
 
