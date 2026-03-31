@@ -124,16 +124,12 @@ class Hypersocket:
                         future = self._request_futures.pop(key)
                         future.set_result(msg["data"])
                     case "clearinghouseState":
-                        logging.info("Response handler: received clearinghouseState update")
                         self._dispatch_clearinghouse_state(msg["data"])
                     case "orderUpdates":
-                        logging.info("Response handler: received orderUpdate")
                         self._dispatch_order_updates(msg["data"])
                     case "user":
-                        logging.info("Response handler: received userEvent")
                         self._dispatch_user_events(msg["data"])
                     case "bbo":
-                        logging.info("Response handler: received bbo")
                         self._dispatch_bbo(msg["data"])
                     case "subscriptionResponse":
                         logging.info(f"Response handler: subscription response: {msg}")

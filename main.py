@@ -20,6 +20,10 @@ DEVIATION_THRESHOLD = 0.0001
 positions: defaultdict[str, float] = defaultdict(float)   
 order_state: defaultdict[Side, dict[int, dict]] = defaultdict(dict)
 
+fills = []
+order_updates = []
+positions_history = []
+
 
 async def trading_loop(queue: asyncio.Queue, ws: Hypersocket):
     logging.info("Starting trading loop...")
@@ -79,7 +83,7 @@ async def update_existing_orders(ws: Hypersocket, bid: float, ask: float):
                     logging.info(f"Modifying {side} order {oid} to {new_price}")
                     response = ws.modify_order(
                         oid=oid,
-                        name=NAME,
+                        coin=NAME,
                         is_buy=side == "B",
                         sz=QUOTE_SIZE,
                         limit_px=new_price,
@@ -87,10 +91,10 @@ async def update_existing_orders(ws: Hypersocket, bid: float, ask: float):
                     )
                     logging.info(f"Modify response: {response}")
                 case "cancelled" | "filled":
-                    logging.error(f"Order {oid} is {details['status']}. SHould have been removed. Exiiting...")
+                    logging.error(f"Order {oid} is {details['status']}. SHould have been removed. Exiting...")
                     raise Exception
                 case _:
-                    logging.info(f"Order {oid} has status {details['status']}. No action taken.")
+                    logging.warning(f"Updating order: Order {oid} has status {details['status']}. No action taken.")
     
 
 def round_price(price: float, sig_figs: int = 5) -> float:
@@ -126,10 +130,14 @@ async def place_new_order(ws: Hypersocket, side: Side, coin: str, price: float):
 
 
 async def update_orders(queue: asyncio.Queue):
+    global order_updates
+
     while True:
         orders = await queue.get()
         logging.info(f"updating orders: {orders}")
         for ou in orders:
+            order_updates.append(ou)
+
             side = ou.order.side
             oid = ou.order.oid
             match ou.status:
@@ -143,7 +151,7 @@ async def update_orders(queue: asyncio.Queue):
 
 
 async def update_positions(queue: asyncio.Queue):
-    global positions
+    global positions, positions_history
     while True:
         p = await queue.get()
         logging.info(f"updating positions: {p}")
@@ -151,6 +159,8 @@ async def update_positions(queue: asyncio.Queue):
             for pos in p:
                 if pos.coin == NAME:
                     positions[pos.coin] = pos.szi
+                    positions_history.append(pos.szi)
+
                 else:
                     logging.warning(f"Received position for coin != {NAME}, ignoring...")
         else:
@@ -159,9 +169,22 @@ async def update_positions(queue: asyncio.Queue):
 
 
 async def update_user_events(queue: asyncio.Queue):
+    global fills
     while True:
         ue = await queue.get()
         logging.info(f"updating user events: {ue}")
+        if fills := ue.get("fills"):
+            fills.append(fills)
+
+
+async def log_tracking():
+    while True:
+        logging.info(f"Recent fills: {fills}")
+        logging.info(f"Recent order updates: {order_updates}")
+        logging.info(f"Positions history: {positions_history}")
+        await asyncio.sleep(10)
+
+
 
 
 async def main():
@@ -194,6 +217,7 @@ async def main():
             tg.create_task(update_orders(order_updates_queue))
             tg.create_task(update_positions(ch_queue))
             tg.create_task(update_user_events(user_events_queue))
+            tg.create_task(log_tracking())
 
     except* KeyboardInterrupt:
         logging.info("KeyboardInterrupt received, shutting down...")
