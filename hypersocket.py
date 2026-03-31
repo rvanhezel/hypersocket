@@ -3,6 +3,7 @@ import logging
 import websockets
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import StrEnum
 import time
 from hyperliquid.utils.signing import sign_l1_action, get_timestamp_ms, float_to_wire
@@ -61,7 +62,7 @@ class Fill:
     fee: float
     fee_token: str
     start_position: float
-    time: int
+    time: datetime
     tid: int
     builder_fee: float | None = None
 
@@ -115,7 +116,7 @@ class Hypersocket:
     
     async def _response_handler(self):
         async for message in self._ws:
-            # logging.info(f"<- {message=}")
+            logging.debug(f"<- {message=}")
             msg = json.loads(message)
             if channel := msg.get("channel"):
                 match channel:
@@ -149,7 +150,7 @@ class Hypersocket:
                 logging.warning("Received ws message with no channel")
 
     def _dispatch_order_updates(self, data: dict):
-        logging.info(f"Dispatching order update: data received: {data}")
+        logging.debug(f"Dispatching order update: data received: {data}")
         updates = []
         for item in data:
             o = item["order"]
@@ -174,7 +175,7 @@ class Hypersocket:
             logging.error("uninitialized orderUpdates queue")
 
     def _dispatch_user_events(self, data: dict):
-        logging.info(f"Dispatching user event: data received: {data}")
+        logging.debug(f"Dispatching user event: data received: {data}")
         queue = next((q for k,q in self._request_queues.items() if k.startswith("USEREVENTS:")), None)
         if queue:
             if "fills" in data:
@@ -192,7 +193,7 @@ class Hypersocket:
                         fee=float(f["fee"]),
                         fee_token=f["feeToken"],
                         start_position=float(f["startPosition"]),
-                        time=int(f["time"]),
+                        time=datetime.fromtimestamp(int(f["time"]) / 1000, tz=timezone.utc),
                         tid=int(f["tid"]),
                         builder_fee=float(f["builderFee"]) if f.get("builderFee") else None,
                     )
@@ -203,7 +204,7 @@ class Hypersocket:
             logging.error(f"uninitialized userEvents queue. queue state {self._request_queues=}")
 
     def _dispatch_clearinghouse_state(self, data: dict):
-        logging.info(f"Dispatching clearinghouse state: data received: {data}")
+        logging.debug(f"Dispatching clearinghouse state: data received: {data}")
 
         chs = data["clearinghouseState"]
         key = self._key("clearinghouseState", data["user"])

@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from hypersocket import TOB, Side
 from math import floor, log10
 from collections import defaultdict
+import time
 
 
 NAME = "BTC"
@@ -81,12 +82,12 @@ async def update_existing_orders(ws: Hypersocket, bid: float, ask: float):
                 case "resting" | "open":
                     new_price = round_price(ask if side == "A" else bid)
                     logging.info(f"Modifying {side} order {oid} to {new_price}")
-                    response = ws.modify_order(
+                    response = await ws.modify_order(
                         oid=oid,
                         coin=NAME,
                         is_buy=side == "B",
-                        sz=QUOTE_SIZE,
-                        limit_px=new_price,
+                        price=new_price,
+                        size=QUOTE_SIZE,
                         order_type={"limit": {"tif": TIF}},
                     )
                     logging.info(f"Modify response: {response}")
@@ -169,19 +170,23 @@ async def update_positions(queue: asyncio.Queue):
 
 
 async def update_user_events(queue: asyncio.Queue):
-    global fills
+    global fills, PREVIOUS_MID
     while True:
         ue = await queue.get()
         logging.info(f"updating user events: {ue}")
         if fills := ue.get("fills"):
-            fills.append(fills)
+            for f in fills:
+                cur_time = time.time()
+                latest_tick = PREVIOUS_MID
+                fills.append(fills)
+                logging.info(f"New fill at {f.time}: {f.sz}@{f.px}, latest tick: {latest_tick} @ time: {cur_time}")
 
 
 async def log_tracking():
     while True:
-        logging.info(f"Recent fills: {fills}")
-        logging.info(f"Recent order updates: {order_updates}")
-        logging.info(f"Positions history: {positions_history}")
+        logging.info(f"Tracking: All fills: {fills}")
+        logging.info(f"Tracking: All order updates: {order_updates}")
+        logging.info(f"Tracking: All positions history: {positions_history}")
         await asyncio.sleep(10)
 
 
