@@ -179,35 +179,32 @@ class Hypersocket:
 
     def _dispatch_user_events(self, data: dict):
         logging.info(f"Dispatching user event: data received: {data}")
-        key = self._key("userEvents", data["user"])
-        if queue := self._request_queues.get(key):
-            for event in data["events"]:
-                if "fills" in event:
-                    fills = [
-                        Fill(
-                            coin=f["coin"],
-                            px=float(f["px"]),
-                            sz=float(f["sz"]),
-                            side=f["side"],
-                            dir=f["dir"],
-                            closed_pnl=float(f["closedPnl"]),
-                            hash=f["hash"],
-                            oid=int(f["oid"]),
-                            crossed=f["crossed"],
-                            fee=float(f["fee"]),
-                            fee_token=f["feeToken"],
-                            start_position=float(f["startPosition"]),
-                            time=int(f["time"]),
-                            tid=int(f["tid"]),
-                            builder_fee=float(f["builderFee"]) if f.get("builderFee") else None,
-                        )
-                        for f in event["fills"]
-                    ]
-                    queue.put_nowait({"type": "fills", "data": fills})
-                else:
-                    queue.put_nowait(event)
+        queue = next((q for k,q in self._request_queues.items() if k.startswith("USEREVENTS:")), None)
+        if queue:
+            if "fills" in data:
+                fills = [
+                    Fill(
+                        coin=f["coin"],
+                        px=float(f["px"]),
+                        sz=float(f["sz"]),
+                        side=f["side"],
+                        dir=f["dir"],
+                        closed_pnl=float(f["closedPnl"]),
+                        hash=f["hash"],
+                        oid=int(f["oid"]),
+                        crossed=f["crossed"],
+                        fee=float(f["fee"]),
+                        fee_token=f["feeToken"],
+                        start_position=float(f["startPosition"]),
+                        time=int(f["time"]),
+                        tid=int(f["tid"]),
+                        builder_fee=float(f["builderFee"]) if f.get("builderFee") else None,
+                    )
+                    for f in data["fills"]
+                ]
+                queue.put_nowait({"type": "fills", "data": fills})
         else:
-            logging.error(f"uninitialized userEvents queue for {key=}")
+            logging.error(f"uninitialized userEvents queue. queue state {self._request_queues=}")
 
     def _dispatch_clearinghouse_state(self, data: dict):
         logging.info(f"Dispatching clearinghouse state: data received: {data}")

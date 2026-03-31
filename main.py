@@ -10,12 +10,12 @@ from collections import defaultdict
 
 
 NAME = "BTC"
-QUOTE_SIZE = 0.1
-MAX_POSITION_SIZE = 0.5
+QUOTE_SIZE = 0.01
+MAX_POSITION_SIZE = 0.1
 SPREAD = 0.0001
 TIF = "Alo"
 PREVIOUS_MID = None
-DEVIATION_THRESHOLD = 0.001
+DEVIATION_THRESHOLD = 0.0001
 
 positions: defaultdict[str, float] = defaultdict(float)   
 order_state: defaultdict[Side, dict[int, dict]] = defaultdict(dict)
