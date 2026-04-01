@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from hypersocket import Hypersocket
 import asyncio
 import logging
@@ -137,7 +138,7 @@ async def update_orders(queue: asyncio.Queue):
         orders = await queue.get()
         logging.info(f"updating orders: {orders}")
         for ou in orders:
-            order_updates.append(ou)
+            order_updates.append((ou.order.side, ou.order.limit_px, ou.order.sz, ou.order.oid, ou.status))
 
             side = ou.order.side
             oid = ou.order.oid
@@ -174,12 +175,12 @@ async def update_user_events(queue: asyncio.Queue):
     while True:
         ue = await queue.get()
         logging.info(f"updating user events: {ue}")
-        if fills := ue.get("fills"):
-            for f in fills:
-                cur_time = time.time()
+        if latest_fills := ue.get("data"):
+            for f in latest_fills:
+                cur_time =  datetime.fromtimestamp(time.time(), tz=timezone.utc)
                 latest_tick = PREVIOUS_MID
-                fills.append(fills)
-                logging.info(f"New fill at {f.time}: {f.sz}@{f.px}, latest tick: {latest_tick} @ time: {cur_time}")
+                fills.append((f.side, f.px, f.sz, f.oid, f.time))
+                logging.info(f"New {f.side} fill at {f.time}: {f.sz}@{f.px}, latest tick: {latest_tick} @ time: {cur_time}")
 
 
 async def log_tracking():
