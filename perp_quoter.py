@@ -102,7 +102,7 @@ class PerpQuoter:
                     case "resting" | "open":
                         new_price = round_price(ask if side == "A" else bid)
                         logging.info(f"Modifying {side} order {oid} to {new_price}")
-                        response = await ws.modify_order(
+                        response = await self.ws.modify_order(
                             oid=oid,
                             coin=self.name,
                             is_buy=side == "B",
@@ -209,9 +209,10 @@ async def main():
     account = eth_account.Account.from_key(os.getenv("HL_API_SECRET"))
     address = os.getenv("HL_ACCOUNT_ADDRESS")
 
-    quoter = PerpQuoter()
     ws = Hypersocket(os.getenv("HL_API_SECRET"))
     await ws.connect()
+    quoter = PerpQuoter(ws)
+
 
     bbo_queue = await ws.subscribe({"type": "bbo", "coin": quoter.name})
     user_events_queue = await ws.subscribe({"type": "userEvents", "user": address})
@@ -221,7 +222,7 @@ async def main():
     try:
         async with asyncio.TaskGroup() as tg:
             tg.create_task(ws.wait_for_response_handler())
-            tg.create_task(quoter.trading_loop(bbo_queue, ws))
+            tg.create_task(quoter.trading_loop(bbo_queue))
             tg.create_task(quoter.update_orders(order_updates_queue))
             tg.create_task(quoter.update_positions(ch_queue))
             tg.create_task(quoter.update_user_events(user_events_queue))
