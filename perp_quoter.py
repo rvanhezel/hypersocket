@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from hypersocket import Hypersocket
 import asyncio
 import logging
+import logging_loki
 import eth_account
 import os
 from dotenv import load_dotenv
@@ -197,14 +198,17 @@ class PerpQuoter:
 
 async def main():
     log_format = "%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
-    logging.basicConfig(
-        level=logging.INFO,
-        format=log_format,
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler("app.log", mode="w"),
-        ],
-    )
+    handlers = [
+        logging.StreamHandler(),
+        logging.FileHandler("app.log", mode="w"),
+    ]
+    if loki_url := os.getenv("LOKI_URL"):
+        handlers.append(logging_loki.LokiHandler(
+            url=f"{loki_url}/loki/api/v1/push",
+            tags={"job": "hypersocket"},
+            version="1",
+        ))
+    logging.basicConfig(level=logging.INFO, format=log_format, handlers=handlers)
     logging.info("Launching main...")
     account = eth_account.Account.from_key(os.getenv("HL_API_SECRET"))
     address = os.getenv("HL_ACCOUNT_ADDRESS")
